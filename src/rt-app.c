@@ -430,9 +430,15 @@ static int run_event(event_data_t *event, int dry_run,
 	case rtapp_sleep:
 		{
 		struct timespec sleep = usec_to_timespec(event->duration);
-		log_debug("[%d] sleep %d start", task_idx, event->duration);
-		nanosleep(&sleep, NULL);
-		log_debug("[%d] sleep %d end", task_idx, event->duration);
+		log_debug("[%d] sleep %d (%ld.%09ld) start", task_idx, event->duration, sleep.tv_sec, sleep.tv_nsec);
+		while(1) {
+			int result = nanosleep(&sleep, &sleep);
+			if (result == 0)
+				break;
+			log_debug("[%d] sleep %d broken with error %d (%ld.%09ld) left", task_idx, event->duration,
+					result, sleep.tv_sec, sleep.tv_nsec);
+			}
+		log_debug("[%d] sleep %d end. managed %ld.%09ld", task_idx, event->duration, sleep.tv_sec, sleep.tv_nsec);
 		}
 		break;
 	case rtapp_run:
