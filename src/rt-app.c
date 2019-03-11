@@ -1150,7 +1150,11 @@ void *thread_body(void *arg)
 	free(data->name);
 	free(data);
 
-	pthread_exit(NULL);
+	/*
+	 * keep lint tools quiet - return NULL
+	 * instead of calling pthread_exit(NULL)
+	 */
+	return NULL;
 }
 
 void setup_thread_logging(thread_data_t *tdata)
