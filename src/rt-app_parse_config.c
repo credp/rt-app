@@ -377,6 +377,16 @@ _strncmp_strlen(const char *event_name, const char *match)
 
 #define name_starts(m) !_strncmp_strlen(name, m)
 
+static int
+parse_valid_int(int *dest, struct json_object *obj)
+{
+	if (!json_object_is_type(obj, json_type_int))
+		return 0;
+	*dest = json_object_get_int(obj);
+	return -1;
+}
+
+static int
 static void
 parse_thread_event_data(char *name, struct json_object *obj,
 		  event_data_t *data, rtapp_options_t *opts, long tag)
@@ -389,10 +399,8 @@ parse_thread_event_data(char *name, struct json_object *obj,
 
 	if (name_starts("run") || name_starts("sleep")) {
 
-		if (!json_object_is_type(obj, json_type_int))
+		if (!parse_valid_int(&data->duration, obj))
 			goto unknown_event;
-
-		data->duration = json_object_get_int(obj);
 
 		if (name_starts("sleep"))
 			data->type = rtapp_sleep;
@@ -407,14 +415,13 @@ parse_thread_event_data(char *name, struct json_object *obj,
 
 	if (name_starts("mem") || name_starts("iorun")) {
 
-		if (!json_object_is_type(obj, json_type_int))
+		if (!parse_valid_int(&data->count, obj))
 			goto unknown_event;
 
 		/* create an unique name for per-thread buffer */
 		ref = create_unique_name(unique_name, sizeof(unique_name), "mem", tag);
 		i = get_resource_index(ref, rtapp_mem, opts);
 		data->res = i;
-		data->count = json_object_get_int(obj);
 
 		/* A single IO devices for all threads */
 		if (name_starts("iorun")) {
