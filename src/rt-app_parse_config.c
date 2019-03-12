@@ -369,6 +369,14 @@ static char* create_unique_name(char *tmp, int size, const char* ref, long tag)
 	return tmp;
 }
 
+static int
+_strncmp_strlen(const char *event_name, const char *match)
+{
+	return strncmp(event_name, match, strlen(match));
+}
+
+#define name_starts(m) !_strncmp_strlen(name, m)
+
 static void
 parse_thread_event_data(char *name, struct json_object *obj,
 		  event_data_t *data, rtapp_options_t *opts, long tag)
@@ -379,17 +387,16 @@ parse_thread_event_data(char *name, struct json_object *obj,
 	char *tmp;
 	int i;
 
-	if (!strncmp(name, "run", strlen("run")) ||
-			!strncmp(name, "sleep", strlen("sleep"))) {
+	if (name_starts("run") || name_starts("sleep")) {
 
 		if (!json_object_is_type(obj, json_type_int))
 			goto unknown_event;
 
 		data->duration = json_object_get_int(obj);
 
-		if (!strncmp(name, "sleep", strlen("sleep")))
+		if (name_starts("sleep"))
 			data->type = rtapp_sleep;
-		else if (!strncmp(name, "runtime", strlen("runtime")))
+		else if (name_starts("runtime"))
 			data->type = rtapp_runtime;
 		else
 			data->type = rtapp_run;
@@ -398,8 +405,8 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		return;
 	}
 
-	if (!strncmp(name, "mem", strlen("mem")) ||
-			!strncmp(name, "iorun", strlen("iorun"))) {
+	if (name_starts("mem") || name_starts("iorun")) {
+
 		if (!json_object_is_type(obj, json_type_int))
 			goto unknown_event;
 
@@ -410,22 +417,19 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		data->count = json_object_get_int(obj);
 
 		/* A single IO devices for all threads */
-		if (strncmp(name, "iorun", strlen("iorun")) == 0) {
+		if (name_starts("iorun")) {
 			i = get_resource_index("io_device", rtapp_iorun, opts);
 			data->dep = i;
-		};
-
-		if (!strncmp(name, "mem", strlen("mem")))
-			data->type = rtapp_mem;
-		else
 			data->type = rtapp_iorun;
+		} else {
+			data->type = rtapp_mem;
+		}
 
 		log_info(PIN2 "type %d count %d", data->type, data->count);
 		return;
 	}
 
-	if (!strncmp(name, "lock", strlen("lock")) ||
-			!strncmp(name, "unlock", strlen("unlock"))) {
+	if (name_starts("lock") || name_starts("unlock")) {
 
 		if (!json_object_is_type(obj, json_type_string))
 			goto unknown_event;
@@ -435,7 +439,7 @@ parse_thread_event_data(char *name, struct json_object *obj,
 
 		data->res = i;
 
-		if (!strncmp(name, "lock", strlen("lock")))
+		if (name_starts("lock"))
 			data->type = rtapp_lock;
 		else
 			data->type = rtapp_unlock;
@@ -447,10 +451,9 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		return;
 	}
 
-	if (!strncmp(name, "signal", strlen("signal")) ||
-			!strncmp(name, "broad", strlen("broad"))) {
+	if (name_starts("signal") || name_starts("broad")) {
 
-		if (!strncmp(name, "signal", strlen("signal")))
+		if (name_starts("signal"))
 			data->type = rtapp_signal;
 		else
 			data->type = rtapp_broadcast;
@@ -470,10 +473,9 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		return;
 	}
 
-	if (!strncmp(name, "wait", strlen("wait")) ||
-			!strncmp(name, "sync", strlen("sync"))) {
+	if (name_starts("wait") || name_starts("sync")) {
 
-		if (!strncmp(name, "wait", strlen("wait")))
+		if (name_starts("wait"))
 			data->type = rtapp_wait;
 		else
 			data->type = rtapp_sig_and_wait;
@@ -505,7 +507,7 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		return;
 	}
 
-    if (!strncmp(name, "barrier", strlen("barrier"))) {
+	if (name_starts("barrier")) {
 
 		if (!json_object_is_type(obj, json_type_string))
 			goto unknown_event;
@@ -523,13 +525,13 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		return;
 	}
 
-	if (!strncmp(name, "timer", strlen("timer"))) {
+	if (name_starts("timer")) {
 
 		tmp = get_string_value_from(obj, "ref", TRUE, "unknown");
-		if (!strncmp(tmp, "unique", strlen("unique")))
-				ref = create_unique_name(unique_name, sizeof(unique_name), tmp, tag);
+		if (_match_name(tmp, "unique"))
+			ref = create_unique_name(unique_name, sizeof(unique_name), tmp, tag);
 		else
-				ref = tmp;
+			ref = tmp;
 
 		i = get_resource_index(ref, rtapp_timer, opts);
 
@@ -549,7 +551,7 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		ddata = &(opts->resources[data->dep]);
 
 		tmp = get_string_value_from(obj, "mode", TRUE, "relative");
-		if (!strncmp(tmp, "absolute", strlen("absolute")))
+		if (_match_name(tmp, "absolute"))
 			rdata->res.timer.relative = 0;
 		free(tmp);
 
@@ -557,7 +559,7 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		return;
 	}
 
-	if (!strncmp(name, "resume", strlen("resume"))) {
+	if (name_starts("resume")) {
 
 		data->type = rtapp_resume;
 
@@ -581,7 +583,7 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		return;
 	}
 
-	if (!strncmp(name, "suspend", strlen("suspend"))) {
+	if (name_starts("suspend")) {
 
 		data->type = rtapp_suspend;
 
@@ -604,13 +606,13 @@ parse_thread_event_data(char *name, struct json_object *obj,
 		log_info(PIN2 "type %d target %s [%d] mutex %s [%d]", data->type, rdata->name, rdata->index, ddata->name, ddata->index);
 		return;
 	}
-	if (!strncmp(name, "yield", strlen("yield"))) {
+	if (name_starts("yield")) {
 		data->type = rtapp_yield;
 		log_info(PIN2 "type %d", data->type);
 		return;
 	}
 
-	if (!strncmp(name, "fork", strlen("fork"))) {
+	if (name_starts("fork")) {
 
 		data->type = rtapp_fork;
 
