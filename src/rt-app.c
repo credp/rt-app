@@ -1180,6 +1180,8 @@ void setup_thread_logging(thread_data_t *tdata)
 	}
 }
 
+extern int validate_parser_item_array(void);
+
 int main(int argc, char* argv[])
 {
 	FILE *gnuplot_script = NULL;
@@ -1187,6 +1189,9 @@ int main(int argc, char* argv[])
 	rtapp_resource_t *rdata;
 	char tmp[PATH_LENGTH];
 	static cpu_set_t orig_set;
+
+	if (!validate_parser_item_array())
+		goto exit_err;
 
 	parse_command_line(argc, argv, &opts);
 

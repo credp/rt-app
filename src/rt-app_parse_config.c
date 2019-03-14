@@ -386,7 +386,313 @@ parse_valid_int(int *dest, struct json_object *obj)
 	return -1;
 }
 
+/*
+ * pted_* functions:
+ * All these functions are called from the parse_event_thread_data
+ * loop. In order to avoid having a single large function as the number
+ * of event types has grown, give each type (potentially) its own.
+ * All of these functions should return 0 for success, anything else
+ * for failure.
+ */
 static int
+pted_runtime(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	if (!parse_valid_int(&data->duration, obj))
+		return -1;
+	log_info(PIN2 "type %d duration %d", data->type, data->duration);
+	return 0;
+}
+
+static int
+pted_mem(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	char unique_name[22];
+	const char *ref;
+
+	if (!parse_valid_int(&data->count, obj))
+		return -1;
+
+	/* create an unique name for per-thread buffer */
+	ref = create_unique_name(unique_name, sizeof(unique_name), "mem", tag);
+	data->res = get_resource_index(ref, rtapp_mem, opts);
+
+	log_info(PIN2 "type %d count %d", data->type, data->count);
+	return 0;
+}
+
+static int
+pted_iorun(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	int i;
+
+	if (pted_mem(obj, data, opts, tag))
+		return -1;
+
+	/* A single IO devices for all threads */
+	data->dep = get_resource_index("io_device", rtapp_iorun, opts);
+
+	/* no additional log_info, pted_mem has the same info */
+	return 0;
+}
+
+static int
+pted_lock(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	rtapp_resource_t *rdata, *ddata;
+	const char *ref;
+
+	if (!json_object_is_type(obj, json_type_string))
+		return -1;
+
+	ref = json_object_get_string(obj);
+	data->res = get_resource_index(ref, rtapp_mutex, opts);
+
+	rdata = &(opts->resources[data->res]);
+	ddata = &(opts->resources[data->dep]);
+	log_info(PIN2 "type %d target %s [%d]", data->type, rdata->name, rdata->index);
+
+	return 0;
+}
+
+static int
+pted_signal(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	rtapp_resource_t *rdata, *ddata;
+	const char *ref;
+	int i;
+
+	if (!json_object_is_type(obj, json_type_string))
+		return -1;
+
+	ref = json_object_get_string(obj);
+	data->res = get_resource_index(ref, rtapp_wait, opts);
+
+	rdata = &(opts->resources[data->res]);
+	ddata = &(opts->resources[data->dep]);
+	log_info(PIN2 "type %d target %s [%d]", data->type, rdata->name, rdata->index);
+
+	return 0;
+}
+
+static int
+pted_wait(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	rtapp_resource_t *rdata, *ddata;
+	char *tmp;
+	int i;
+
+	tmp = get_string_value_from(obj, "ref", TRUE, "unknown");
+	i = get_resource_index(tmp, rtapp_wait, opts);
+	/*
+	 * get_string_value_from allocate the string so with have to free it
+	 * once useless
+	 */
+	free(tmp);
+	data->res = i;
+
+	tmp = get_string_value_from(obj, "mutex", TRUE, "unknown");
+	i = get_resource_index(tmp, rtapp_mutex, opts);
+	/*
+	 * get_string_value_from allocate the string so with have to free it
+	 * once useless
+	 */
+	free(tmp);
+	data->dep = i;
+
+	rdata = &(opts->resources[data->res]);
+	ddata = &(opts->resources[data->dep]);
+	log_info(PIN2 "type %d target %s [%d] mutex %s [%d]", data->type, rdata->name, rdata->index, ddata->name, ddata->index);
+
+	return 0;
+}
+
+static int
+pted_barrier(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	rtapp_resource_t *rdata;
+	const char *ref;
+
+	if (!json_object_is_type(obj, json_type_string))
+		return -1;
+
+	ref = json_object_get_string(obj);
+	data->res = get_resource_index(ref, rtapp_barrier, opts);
+	rdata = &(opts->resources[data->res]);
+	rdata->res.barrier.waiting += 1;
+
+	log_info(PIN2 "type %d target %s [%d] %d users so far", data->type, rdata->name, rdata->index, rdata->res.barrier.waiting);
+
+	return 0;
+}
+
+static int
+pted_timer(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	rtapp_resource_t *rdata, *ddata;
+	char unique_name[22];
+	const char *ref;
+	char *tmp;
+	int i = 0;
+
+	tmp = get_string_value_from(obj, "ref", TRUE, "unknown");
+	if (!_strncmp_strlen(tmp, "unique"))
+		ref = create_unique_name(unique_name, sizeof(unique_name), tmp, tag);
+	else
+		ref = tmp;
+
+	i = get_resource_index(ref, rtapp_timer, opts);
+
+	/*
+	 * get_string_value_from allocate the string so with have to free it
+	 * once useless
+	 */
+	free(tmp);
+
+	data->res = i;
+	data->duration = get_int_value_from(obj, "period", TRUE, 0);
+
+	rdata = &(opts->resources[data->res]);
+	ddata = &(opts->resources[data->dep]);
+
+	tmp = get_string_value_from(obj, "mode", TRUE, "relative");
+	if (!_strncmp_strlen(tmp, "absolute"))
+		rdata->res.timer.relative = 0;
+	free(tmp);
+
+	log_info(PIN2 "type %d target %s [%d] period %d", data->type, rdata->name, rdata->index, data->duration);
+	return 0;
+}
+
+static int
+pted_resume(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	rtapp_resource_t *rdata, *ddata;
+	const char *ref;
+
+	if (!json_object_is_type(obj, json_type_string))
+		return -1;
+
+	ref = json_object_get_string(obj);
+	data->res = get_resource_index(ref, rtapp_wait, opts);
+	data->dep = get_resource_index(ref, rtapp_mutex, opts);
+
+	rdata = &(opts->resources[data->res]);
+	ddata = &(opts->resources[data->dep]);
+	log_info(PIN2 "type %d target %s [%d] mutex %s [%d]", data->type, rdata->name, rdata->index, ddata->name, ddata->index);
+
+	return 0;
+}
+
+/* just log out the event creation, it owns no data beyond type */
+static int
+pted_empty(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	log_info(PIN2 "type %d", data->type);
+	return 0;
+}
+
+static int
+pted_fork(struct json_object *obj, event_data_t *data,
+	     rtapp_options_t *opts, long tag)
+{
+	rtapp_resource_t *rdata;
+	const char *ref;
+
+	if (!json_object_is_type(obj, json_type_string))
+		return -1;
+
+	ref = json_object_get_string(obj);
+	data->res = get_resource_index(ref, rtapp_fork, opts);
+
+	rdata = &(opts->resources[data->res]);
+	rdata->res.fork.ref = strdup(ref);
+	rdata->res.fork.tdata = NULL;
+	rdata->res.fork.nforks = 0;
+
+	if (!rdata->res.fork.ref) {
+		log_error("Failed to duplicate ref");
+		exit(EXIT_FAILURE);
+	}
+
+	log_info(PIN2 "type %d target %s [%d]", data->type, rdata->name, rdata->index);
+	return 0;
+}
+
+/*
+ * parser_items
+ * an array of pted_* name prefix, type and parser function pointers
+ *
+ * This struct is used in the parser loop - each thread event
+ * item from the config file is compared against each prefix
+ * in order. When we find a prefix which matches the start of
+ * the event name, we set the event->type to the stored type
+ * and then call the stored function pointer.
+ * It is also used in obj_is_event.
+ *
+ * Ordering is important here since we only compare the
+ * beginning of the event name for the length of the prefix in
+ * this array - for example, run comes after runtime so we can
+ * tell them apart at parse time.
+ *
+ * At startup, we call validate_parser_item_array to complain if
+ * this table is not ordered correctly.
+ */
+struct {
+	const char *	prefix;
+	resource_t	type;
+	int (*handler)(struct json_object *obj, event_data_t *data,
+			rtapp_options_t *opts, long tag);
+} parser_items[] = {
+	{ "runtime",	rtapp_runtime,	&pted_runtime },
+	{ "run",	rtapp_run,	&pted_runtime },
+	{ "sleep",	rtapp_sleep,	&pted_runtime },
+	{ "mem",	rtapp_mem,	&pted_mem },
+	{ "iorun",	rtapp_iorun,	&pted_iorun },
+	{ "lock",	rtapp_lock,	&pted_lock },
+	{ "unlock",	rtapp_unlock,	&pted_lock },
+	{ "signal",	rtapp_signal,	&pted_signal },
+	{ "broad",	rtapp_broadcast, &pted_signal },
+	{ "wait",	rtapp_wait,	&pted_wait },
+	{ "sync", 	rtapp_sig_and_wait, &pted_wait },
+	{ "barrier",	rtapp_barrier,	&pted_barrier },
+	{ "timer",	rtapp_timer,	&pted_timer },
+	{ "resume",	rtapp_resume,	&pted_resume },
+	{ "suspend",	rtapp_suspend,	&pted_resume },
+	{ "yield",	rtapp_yield,	&pted_empty },
+	{ "fork",	rtapp_fork,	&pted_fork },
+	{ NULL,		rtapp_unknown,  NULL}
+};
+
+/* check invariant string match - no previous strings should be substrings */
+int
+validate_parser_item_array(void)
+{
+	int x, i = 0, err = 0;
+
+	while (parser_items[i].prefix) {
+		x = i+1;
+		while (parser_items[x].prefix) {
+			if (!_strncmp_strlen(parser_items[x].prefix, parser_items[i].prefix)) {
+				log_error("string table incorrectly ordered. Item %d is a substring of item %d", i, x);
+				err++;
+			}
+			x++;
+		}
+		i++;
+	}
+	return(err == 0);
+}
+
 static void
 parse_thread_event_data(char *name, struct json_object *obj,
 		  event_data_t *data, rtapp_options_t *opts, long tag)
@@ -395,257 +701,17 @@ parse_thread_event_data(char *name, struct json_object *obj,
 	char unique_name[22];
 	const char *ref;
 	char *tmp;
-	int i;
+	int i = 0;
 
-	if (name_starts("run") || name_starts("sleep")) {
-
-		if (!parse_valid_int(&data->duration, obj))
-			goto unknown_event;
-
-		if (name_starts("sleep"))
-			data->type = rtapp_sleep;
-		else if (name_starts("runtime"))
-			data->type = rtapp_runtime;
-		else
-			data->type = rtapp_run;
-
-		log_info(PIN2 "type %d duration %d", data->type, data->duration);
-		return;
-	}
-
-	if (name_starts("mem") || name_starts("iorun")) {
-
-		if (!parse_valid_int(&data->count, obj))
-			goto unknown_event;
-
-		/* create an unique name for per-thread buffer */
-		ref = create_unique_name(unique_name, sizeof(unique_name), "mem", tag);
-		i = get_resource_index(ref, rtapp_mem, opts);
-		data->res = i;
-
-		/* A single IO devices for all threads */
-		if (name_starts("iorun")) {
-			i = get_resource_index("io_device", rtapp_iorun, opts);
-			data->dep = i;
-			data->type = rtapp_iorun;
-		} else {
-			data->type = rtapp_mem;
+	while (parser_items[i].prefix) {
+		if(name_starts(parser_items[i].prefix)) {
+			data->type = parser_items[i].type;
+			if (parser_items[i].handler(obj, data, opts, tag))
+				goto unknown_event;
+			return;
 		}
-
-		log_info(PIN2 "type %d count %d", data->type, data->count);
-		return;
-	}
-
-	if (name_starts("lock") || name_starts("unlock")) {
-
-		if (!json_object_is_type(obj, json_type_string))
-			goto unknown_event;
-
-		ref = json_object_get_string(obj);
-		i = get_resource_index(ref, rtapp_mutex, opts);
-
-		data->res = i;
-
-		if (name_starts("lock"))
-			data->type = rtapp_lock;
-		else
-			data->type = rtapp_unlock;
-
-		rdata = &(opts->resources[data->res]);
-		ddata = &(opts->resources[data->dep]);
-
-		log_info(PIN2 "type %d target %s [%d]", data->type, rdata->name, rdata->index);
-		return;
-	}
-
-	if (name_starts("signal") || name_starts("broad")) {
-
-		if (name_starts("signal"))
-			data->type = rtapp_signal;
-		else
-			data->type = rtapp_broadcast;
-
-		if (!json_object_is_type(obj, json_type_string))
-			goto unknown_event;
-
-		ref = json_object_get_string(obj);
-		i = get_resource_index(ref, rtapp_wait, opts);
-
-		data->res = i;
-
-		rdata = &(opts->resources[data->res]);
-		ddata = &(opts->resources[data->dep]);
-
-		log_info(PIN2 "type %d target %s [%d]", data->type, rdata->name, rdata->index);
-		return;
-	}
-
-	if (name_starts("wait") || name_starts("sync")) {
-
-		if (name_starts("wait"))
-			data->type = rtapp_wait;
-		else
-			data->type = rtapp_sig_and_wait;
-
-		tmp = get_string_value_from(obj, "ref", TRUE, "unknown");
-		i = get_resource_index(tmp, rtapp_wait, opts);
-		/*
-		 * get_string_value_from allocate the string so with have to free it
-		 * once useless
-		 */
-		free(tmp);
-
-		data->res = i;
-
-		tmp = get_string_value_from(obj, "mutex", TRUE, "unknown");
-		i = get_resource_index(tmp, rtapp_mutex, opts);
-		/*
-		 * get_string_value_from allocate the string so with have to free it
-		 * once useless
-		 */
-		free(tmp);
-
-		data->dep = i;
-
-		rdata = &(opts->resources[data->res]);
-		ddata = &(opts->resources[data->dep]);
-
-		log_info(PIN2 "type %d target %s [%d] mutex %s [%d]", data->type, rdata->name, rdata->index, ddata->name, ddata->index);
-		return;
-	}
-
-	if (name_starts("barrier")) {
-
-		if (!json_object_is_type(obj, json_type_string))
-			goto unknown_event;
-
-		data->type = rtapp_barrier;
-
-		ref = json_object_get_string(obj);
-		i = get_resource_index(ref, rtapp_barrier, opts);
-
-		data->res = i;
-		rdata = &(opts->resources[data->res]);
-		rdata->res.barrier.waiting += 1;
-
-		log_info(PIN2 "type %d target %s [%d] %d users so far", data->type, rdata->name, rdata->index, rdata->res.barrier.waiting);
-		return;
-	}
-
-	if (name_starts("timer")) {
-
-		tmp = get_string_value_from(obj, "ref", TRUE, "unknown");
-		if (_match_name(tmp, "unique"))
-			ref = create_unique_name(unique_name, sizeof(unique_name), tmp, tag);
-		else
-			ref = tmp;
-
-		i = get_resource_index(ref, rtapp_timer, opts);
-
-		/*
-		 * get_string_value_from allocate the string so with have to free it
-		 * once useless
-		 */
-		free(tmp);
-
-		data->res = i;
-
-		data->duration = get_int_value_from(obj, "period", TRUE, 0);
-
-		data->type = rtapp_timer;
-
-		rdata = &(opts->resources[data->res]);
-		ddata = &(opts->resources[data->dep]);
-
-		tmp = get_string_value_from(obj, "mode", TRUE, "relative");
-		if (_match_name(tmp, "absolute"))
-			rdata->res.timer.relative = 0;
-		free(tmp);
-
-		log_info(PIN2 "type %d target %s [%d] period %d", data->type, rdata->name, rdata->index, data->duration);
-		return;
-	}
-
-	if (name_starts("resume")) {
-
-		data->type = rtapp_resume;
-
-		if (!json_object_is_type(obj, json_type_string))
-			goto unknown_event;
-
-		ref = json_object_get_string(obj);
-
-		i = get_resource_index(ref, rtapp_wait, opts);
-
-		data->res = i;
-
-		i = get_resource_index(ref, rtapp_mutex, opts);
-
-		data->dep = i;
-
-		rdata = &(opts->resources[data->res]);
-		ddata = &(opts->resources[data->dep]);
-
-		log_info(PIN2 "type %d target %s [%d] mutex %s [%d]", data->type, rdata->name, rdata->index, ddata->name, ddata->index);
-		return;
-	}
-
-	if (name_starts("suspend")) {
-
-		data->type = rtapp_suspend;
-
-		if (!json_object_is_type(obj, json_type_string))
-			goto unknown_event;
-
-		ref = json_object_get_string(obj);
-
-		i = get_resource_index(ref, rtapp_wait, opts);
-
-		data->res = i;
-
-		i = get_resource_index(ref, rtapp_mutex, opts);
-
-		data->dep = i;
-
-		rdata = &(opts->resources[data->res]);
-		ddata = &(opts->resources[data->dep]);
-
-		log_info(PIN2 "type %d target %s [%d] mutex %s [%d]", data->type, rdata->name, rdata->index, ddata->name, ddata->index);
-		return;
-	}
-	if (name_starts("yield")) {
-		data->type = rtapp_yield;
-		log_info(PIN2 "type %d", data->type);
-		return;
-	}
-
-	if (name_starts("fork")) {
-
-		data->type = rtapp_fork;
-
-		if (!json_object_is_type(obj, json_type_string))
-			goto unknown_event;
-
-		ref = json_object_get_string(obj);
-
-		i = get_resource_index(ref, rtapp_fork, opts);
-
-		data->res = i;
-
-		rdata = &(opts->resources[data->res]);
-
-		rdata->res.fork.ref = strdup(ref);
-		rdata->res.fork.tdata = NULL;
-		rdata->res.fork.nforks = 0;
-
-		if (!rdata->res.fork.ref) {
-			log_error("Failed to duplicate ref");
-			exit(EXIT_FAILURE);
-		}
-
-		log_info(PIN2 "type %d target %s [%d]", data->type, rdata->name, rdata->index);
-		return;
-	}
+		i++;
+	};
 
 	log_error(PIN2 "Resource %s not found in the resource section !!!", ref);
 	log_error(PIN2 "Please check the resource name or the resource section");
@@ -654,42 +720,19 @@ unknown_event:
 	data->duration = 0;
 	data->type = rtapp_run;
 	log_error(PIN2 "Unknown or mismatch %s event type !!!", name);
-
 }
-
-static char *events[] = {
-	"lock",
-	"unlock",
-	"wait",
-	"signal",
-	"broad",
-	"sync",
-	"sleep",
-	"runtime",
-	"run",
-	"timer",
-	"suspend",
-	"resume",
-	"mem",
-	"iorun",
-	"yield",
-	"barrier",
-	"fork",
-	NULL
-};
 
 static int
 obj_is_event(char *name)
 {
-    char **pos;
-
-    for (pos = events; *pos; pos++) {
-	    char *event = *pos;
-	    if (!strncmp(name, event, strlen(event)))
-		    return 1;
-    }
-
-    return 0;
+	const char *event;
+	int i = 0;
+	do{
+		event = parser_items[i++].prefix;
+		if (!strncmp(name, event, strlen(event)))
+			return 1;
+	} while(event);
+	return 0;
 }
 
 static void parse_cpuset_data(struct json_object *obj, cpuset_data_t *data)
