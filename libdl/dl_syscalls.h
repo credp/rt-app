@@ -84,12 +84,14 @@
 #define SCHED_FLAG_KEEP_PARAMS          0x10
 #define SCHED_FLAG_UTIL_CLAMP_MIN       0x20
 #define SCHED_FLAG_UTIL_CLAMP_MAX       0x40
+#define SCHED_FLAG_UTIL_CLAMP_HOLD      0x80
 
 #define SCHED_FLAG_KEEP_ALL 	(SCHED_FLAG_KEEP_POLICY | \
 				 SCHED_FLAG_KEEP_PARAMS)
 
 #define SCHED_FLAG_UTIL_CLAMP	(SCHED_FLAG_UTIL_CLAMP_MIN | \
-				 SCHED_FLAG_UTIL_CLAMP_MAX)
+				 SCHED_FLAG_UTIL_CLAMP_MAX | \
+				 SCHED_FLAG_UTIL_CLAMP_HOLD)
 
 #define SCHED_FLAG_ALL	(SCHED_FLAG_RESET_ON_FORK	| \
 			 SCHED_FLAG_RECLAIM		| \
@@ -117,6 +119,7 @@ struct sched_attr {
 	/* Utilization hints */
 	__u32 sched_util_min;
 	__u32 sched_util_max;
+	__u32 sched_util_min_active_ns;
 };
 
 int sched_setattr(pid_t pid,

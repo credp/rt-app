@@ -282,6 +282,12 @@ util_max: Integer. Can be specified at task level or phase level. Sets the max
 utilization value the task can have; which helps capping the task from
 scheduler point of view.
 
+hold_ns: Integer. Can be specified at task level or phase level. Sets the min
+activation time (in nanoseconds) which applies to any util_min clamping; once
+a task with a non-zero hold_ns wakes, the util_min clamp level will remain in
+effect on the RQ for at least hold_ns. This is used to more precisely control
+frequency selection.
+
 *** taskgroups
 
 * taskgroup: String. Can be specified at task level or phase level. Currently

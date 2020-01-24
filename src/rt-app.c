@@ -977,10 +977,27 @@ static void set_thread_priority(thread_data_t *data, sched_data_t *sched_data)
 	}
 
 	if (sched_data->policy != deadline &&
-	    (sched_data->util_min != -1 || sched_data->util_max != -1)) {
+	    (sched_data->util_min != -1 || sched_data->util_max != -1 ||
+	     sched_data->hold_ns != -1)) {
 		sa_params.size = sizeof(struct sched_attr);
 		sa_params.sched_flags = SCHED_FLAG_KEEP_ALL;
 		tid = gettid();
+
+		/*
+		 * Currently we cannot use the syscall to set a clamp
+		 * value without specifing a valid policy and priority.
+		 * Read the current values and use them for the following
+		 * syscall.
+		 * TODO: fix __sched_setscheduler() to get rid of this!
+		 */
+		ret = sched_getattr(tid, &sa_params,
+				    sizeof(struct sched_attr), flags);
+		if (ret != 0) {
+			log_critical("[%d] sched_getattr returned %d",
+				     data->ind, ret);
+			perror("sched_getattr");
+			exit(EXIT_FAILURE);
+		}
 
 		if (sched_data->util_min != -1) {
 			sa_params.sched_util_min = sched_data->util_min;
@@ -1000,13 +1017,15 @@ static void set_thread_priority(thread_data_t *data, sched_data_t *sched_data)
 				   "rtapp_attrs: event=uclamp util_max=%d",
 				   sched_data->util_max);
 		}
-
-		/*
-		 * We can't change clamp values without valid policy and
-		 * priority values.
-		 */
-		sa_params.sched_policy = sched_data->policy;
-		sa_params.sched_priority = sched_data->prio;
+		if (sched_data->hold_ns != -1) {
+			sa_params.sched_util_min_active_ns = sched_data->hold_ns;
+			sa_params.sched_flags |= SCHED_FLAG_UTIL_CLAMP_HOLD;
+			log_notice("[%d] setting hold_ns=%d",
+				   data->ind, sched_data->hold_ns);
+			log_ftrace(ft_data.marker_fd, FTRACE_ATTRS,
+				   "rtapp_attrs: event=uclamp hold_ns=%d",
+				   sched_data->hold_ns);
+		}
 
 		ret = sched_setattr(tid, &sa_params, flags);
 		if (ret != 0) {
